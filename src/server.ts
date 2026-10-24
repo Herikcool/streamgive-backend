@@ -6,7 +6,7 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import Fastify from 'fastify';
-import type { FastifyError } from 'fastify';
+import type { FastifyError, FastifyReply } from 'fastify';
 
 import { prisma } from './db.js';
 import { recordHttpRequest, renderMetrics } from './metrics.js';
@@ -17,6 +17,7 @@ import { indexerStatusRoutes } from './routes/indexerStatus.js';
 import { getLatestLedgerSequence } from './stellar/rpc.js';
 import { ngoApplicationRoutes } from './routes/ngoApplications.js';
 import { ngoRoutes } from './routes/ngos.js';
+import { deadLetterRoutes } from './routes/deadLetters.js';
 import { streamRoutes } from './routes/streams.js';
 import { registerRequestIdHeader, requestIdOptions } from './requestId.js';
 import { registerCompression } from './plugins/compression.js';
@@ -329,7 +330,7 @@ export function buildServer(options?: BuildServerOptions) {
    * @returns 200 `{ status: "ok", db: "ok" }` or
    *          503 `{ status: "error", db: "error" }`.
    */
-  app.get('/health', async (_req, reply) => {
+  const healthHandler = async (_req: unknown, reply: FastifyReply) => {
     const dbResult = await Promise.allSettled([
       withTimeout(prisma.$queryRaw`SELECT 1`, HEALTH_CHECK_TIMEOUT_MS),
     ]);
@@ -337,7 +338,10 @@ export function buildServer(options?: BuildServerOptions) {
     const db = dbResult[0].status === 'fulfilled' ? 'ok' : 'error';
     const status = db === 'ok' ? 'ok' : 'error';
     return reply.code(status === 'ok' ? 200 : 503).send({ status, db });
-  });
+  };
+
+  app.get('/health', healthHandler);
+  app.get('/v1/health', healthHandler);
 
   /**
    * Readiness probe — checks the database, the Stellar RPC node, and indexer
@@ -439,6 +443,7 @@ export function buildServer(options?: BuildServerOptions) {
   app.register(impactRoutes, apiPrefix);
   app.register(ngoApplicationRoutes, apiPrefix);
   app.register(indexerStatusRoutes, apiPrefix);
+  app.register(deadLetterRoutes, apiPrefix);
   registerLogRetention(app);
 
   return app;
